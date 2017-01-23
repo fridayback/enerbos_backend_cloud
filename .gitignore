@@ -50,3 +50,5 @@ Temporary Items
 *.tlog
 *.obj
 *.ipdb
+*.brk
+*.o
