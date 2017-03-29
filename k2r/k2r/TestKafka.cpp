@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <time.h>
 #include <stdlib.h>
+#include <cpprest/http_client.h>
+#include <strstream>
 
 #include "fdcmdline.h"
 #include <map>
@@ -31,17 +33,23 @@
 #ifdef _WIN64  
 #ifdef _DEBUG  
 #pragma comment(lib, "..\\k2r\\lib\\x64\\Debug\\libjason.lib")
+#pragma comment(lib, "..\\k2r\\lib\\x64\\Debug\\cpprestsdk.lib")
 #else
 #pragma comment(lib, "..\\k2r\\lib\\x64\\Release\\libjason.lib")
+#pragma comment(lib, "..\\k2r\\lib\\x64\\Release\\cpprestsdk.lib")
 #endif
 #else  
 #ifdef _DEBUG  
 #pragma comment(lib, "..\\k2r\\lib\\x86\\Debug\\libjason.lib")
+#pragma comment(lib, "..\\k2r\\lib\\x86\\Debug\\cpprestsdk.lib")
 #else
 #pragma comment(lib, "..\\k2r\\lib\\x86\\Release\\libjason.lib")
+#pragma comment(lib, "..\\k2r\\lib\\x86\\Release\\cpprestsdk.lib")
 #endif
 #endif  
 
+time_t str2sec(string str);
+int commitdata(const char* s);
 std::map<std::string, int> g_pt_status;
 
 #ifdef _WIN32
@@ -96,6 +104,30 @@ typedef struct th_info_t
 
 map<unsigned int, th_info_t*> g_ThreadList;
 
+void simulate(string& s)
+{
+	stringstream ss;
+	time_t tt;
+	tm t;
+	time(&tt);
+	localtime_s(&t, &tt);
+	static int st = 0;
+	st = st > 0 ? 0 : 1;
+	ss << "{\"MSG_HEAD\":\"begin\",\"MSG_ORG\" : \"SH_JMDX\",\"MSG_PRJ\" : \"SH_JMDX_1\",\"MSG_SYS\" : \"BA\","
+		<<"\"MSG_DEV\" : \"BA\",\"MSG_TYPE\" : \"dh_u\",\"MSG_ID\" : \"20151109 - 091011\",\"MSG_SEG\":\"0\",\"MSG_NUM\" : \" - 1\",";
+
+	ss << "\"MSG_BODY\":["; 
+	for (int i = 0; i < 10000;i++)
+	{
+		ss << "{\"ptname\":\"tag" << i << "\",\"pttime\":\"" << t.tm_year + 1900 << "-" << t.tm_mon + 1 << "-"
+			<< t.tm_mday << " " << t.tm_hour << ":" << t.tm_min << ":" << t.tm_sec << "\",\"ptvalue\":\"111\",\"ptstatus\":\""<<st<<"\"},";
+	}
+	s = ss.str();
+	s[s.size() - 1] = ']';
+	s += "}";
+	
+
+}
 
 #ifdef _WIN32
 unsigned __stdcall save_to_redis(void* pobj)
@@ -117,15 +149,20 @@ void* process_data(void* pobj)
 	topic.push_back(g_KafkaTopic);
 	
 	map<string, string> conf;
+	//map<string, string> conf_p;
 
 	conf.insert(pair<string, string>("metadata.broker.list", g_BrokerList));
 	conf.insert(pair<string, string>("group.id", g_GroupId));
 
 	map<string, string> tconf;
 	kafka_consumer_allot k2r_c;
+	//kafka_producer k2r_p;
 
 	k2r_c.loadconfig(conf, tconf);
 	k2r_c.create_topic(topic);
+
+	//k2r_p.loadconfig(conf, conf_p);
+	//k2r_p.create_topic("HIS_DATA");
 
 	//Á¬½Óredis
 	COperateData rediscon;
@@ -139,10 +176,11 @@ void* process_data(void* pobj)
 	Json::Value vb;
 	Json::Value v;
 	Json::Reader r;
+
 	string strJson = "";
 	string strkey = "";
 	string strvalue = "";
-
+	stringstream ss;
 	
 	pinfo->bstate = true;
 	pinfo->ppackage = 0;
@@ -154,7 +192,7 @@ void* process_data(void* pobj)
 	{
 	
 		strJson = k2r_c.consume();
-		
+		//simulate(strJson);
 		//strJson = "{\"MSG_BODY\":[{\"ptname\":\"aaa\",\"pttime\":\"bbb\",\"ptvalue\":\"111\"},{\"ptname\":\"aaa2\",\"pttime\":\"bbb2\",\"ptvalue\":\"222\"}]}";
 		if (strJson.empty())
 		{
@@ -182,17 +220,89 @@ void* process_data(void* pobj)
 		bt = getCurrentTimeByMil();
 		v = vb["MSG_BODY"];
 		dtls.clear();
+		string tagname = "";
+		string pttime = "";
+		string ptstatus = "";
+		string ptvalue = "";
+		string org = "";
+		string site = "";
+		string sys = "";
+		if(vb.isMember("MSG_ORG")) org = vb["MSG_ORG"].asString();
+		if (vb.isMember("MSG_PRJ")) site = vb["MSG_PRJ"].asString();
+		if (vb.isMember("MSG_SYS")) sys = vb["MSG_SYS"].asString();
+// 		Json::FastWriter w;
+// 		Json::Value wv;
+// 		Json::Value wbody;
+// 		wv["MSG_HEAD"] = "begin";
+// 		wv["MSG_ORG"] = vb["MSG_ORG"];
+// 		wv["MSG_PRJ"] = vb["MSG_PRJ"];
+// 		wv["MSG_SYS"] = vb["MSG_SYS"];
+// 		wv["MSG_DEV"] = vb["MSG_DEV"];
+// 		wv["MSG_TYPE"] = "dh_u";
+// 		wv["MSG_ID"] = "end";
+// 		wv["MSG_SEG"] = "0";
+// 		wv["MSG_NUM"] = "-1";
+// 		//wv["MSG_BODY"] = "end";
+// 		wv["MSG_TAIL"] = "end";
+		string httpbody = "";
 		for (int i = 0; i < v.size(); i++)
 		{
-			strkey = g_tag_prefix + v[i]["ptname"].asString();
-			strvalue = v[i]["ptname"].asString() +",0," + v[i]["pttime"].asString()+","+ v[i]["ptvalue"].asString() + ",0";
+			tagname = v[i]["ptname"].asString();
+			pttime = v[i]["pttime"].asString();
+			ptstatus = v[i]["ptstatus"].asString();
+			ptvalue = v[i]["ptvalue"].asString();
+			
+
+			strkey = g_tag_prefix + tagname;
+			if (v[i].isMember("ptstatus") && "" != org && "" != site && "" != sys)
+			{
+				strvalue = tagname + ",0," + pttime + "," + ptvalue + ","+ ptstatus;
+				ss.clear();
+				ss.str("");
+				ss << ptstatus;
+				int st = 0;
+				time_t pt_timestamp = str2sec(pttime)*1000;
+				if(ss>>st && pt_timestamp > 0 )
+				{	
+					st = (st>0) ? 2 : 1;
+
+					int& oldstatus = g_pt_status[tagname];
+					if (oldstatus != st)
+					{
+						oldstatus = st;
+						//////////////////////////////////////////////////////////////////////////
+						ss.clear();
+						ss.str("");
+						ss << "{\"name\": \"pt_abn_record\",\"timestamp\" : " << pt_timestamp << ",\"value\" :" << ptvalue << ",\"tags\" : {\"tagname\": \""<<tagname<<"\",\"ORG\": \""
+							<< org << "\",\"PRJ\": \"" << site << "\",\"SYS\": \"" << sys << "\"}}";
+						httpbody += ss.str() + ",";
+
+						ss.clear();
+						ss.str("");
+						ss << "{\"name\": \"pt_abn_record\",\"timestamp\" : " << pt_timestamp << ",\"value\" :" << ptstatus << ",\"tags\" : {\"snapshot\": \""<<tagname<<"\",\"ORG\": \""
+							<< org << "\",\"PRJ\": \"" << site << "\",\"SYS\": \"" << sys << "\"}}";
+						httpbody += ss.str() + ",";
+					}
+				}
+				
+				
+			}
+			else
+				strvalue = v[i]["ptname"].asString() +",0," + v[i]["pttime"].asString()+","+ v[i]["ptvalue"].asString() + ",0";
 			dtls.push_back(pair<string, string>(strkey, strvalue));
 			//rediscon.Push(strkey, strvalue);
 			pinfo->precorde++;
 		}
+		//wv["MSG_BODY"] = wbody;
 		if (dtls.size() > 0)
 		{
 			rediscon.PushMultiData(dtls);
+		}
+		if (httpbody.size() > 0)
+		{
+			httpbody = "[" + httpbody;
+			httpbody[httpbody.size() - 1] = ']';
+			commitdata(httpbody.c_str());
 		}
 		et = getCurrentTimeByMil();
 		if (bdubug_v)
@@ -247,9 +357,11 @@ void add_thread(int n)
 	//g_ThreadCnt += n;
 }
 
+char kairosdb[128] = "127.0.0.1:8080";
 
 int main(int argc, char **argv)
 {
+
 	if (initSocket() < 0)
 	{
 		printf("Init Socket Failed!\n");
@@ -292,7 +404,8 @@ int main(int argc, char **argv)
 	read_profile_string(str.c_str(), "sys", "broker-list", g_BrokerList, "127.0.0.1:9092");;
 	read_profile_string(str.c_str(), "sys", "group-id", g_GroupId, "KFTP_K2R"); 
 	read_profile_int(str.c_str(), "sys", "thread-count", &g_ThreadCnt, 1);
-	
+
+	read_profile_string(str.c_str(), "sys", "kairosdb", kairosdb, "127.0.0.1:8080");
 	
 
 	add_thread(g_ThreadCnt);
@@ -369,3 +482,73 @@ int main(int argc, char **argv)
 #else
 
 #endif
+
+time_t str2sec(string str)
+{
+	stringstream ss(str);
+	tm t = { 0 };
+	if(6 == sscanf_s(str.c_str(),"%d-%d-%d %d:%d:%d", &t.tm_year , &t.tm_mon, &t.tm_mday , &t.tm_hour, &t.tm_min , &t.tm_sec))
+	//if (ss >> t.tm_year >> t.tm_mon >> t.tm_mday >> t.tm_hour >> t.tm_min >> t.tm_sec)
+	{
+		t.tm_year -= 1900;
+		t.tm_mon -= 1;
+		return mktime(&t);
+	}
+	return -1;
+}
+
+
+int commitdata(const char* s)
+{
+	//printf("%s\n",s);
+	int ret = 0;
+	char ur[255] = { 0 };
+	sprintf_s(ur, "http://%s", kairosdb);
+	//http_client client(web::uri(ur));  
+	//U("http://192.168.1.148:8086")
+	string str = ur;
+	std::wstring wstr(strlen(ur), L' ');
+	std::copy(str.begin(), str.end(), wstr.begin());
+	//wstr
+#ifdef _MSC_VER
+	web::http::client::http_client client(wstr);
+#else
+	utility::string_t addr = ur;
+	web::uri svrcri(addr);
+	http_client client(svrcri);
+#endif	
+
+
+
+	utf8string uir = "/api/v1/datapoints";
+
+
+	//Concurrency::task<http_response> response = client.request(methods::POST, uir,single, types);	
+	web::http::http_response   response = client.request(web::http::methods::POST, uir, s).get();
+	ret = response.status_code();
+	if (ret != 204)
+	{
+		printf("Write  points ERROR:  %u returned.\n", ret);
+		//	LogMessage("Write  points ERROR:  %u returned. wait 3 s ,try again \n", ret);
+		//Sleep(3000);
+		//	http_response   response = client.request(methods::POST, uir, s).get();
+		//		ret = response.status_code();
+		//	if (ret != 204)
+		//		{
+		//			printf("Write  points ERROR AGAIN:  %u returned.\n", ret);
+		//			LogMessage("Write  points ERROR AGAIN:  %u returned. \n", ret);
+		//		}
+		char info[50];
+		sprintf(info, "Write  points ERROR:  %u returned.", ret);
+		//LogMessage(info);
+	}
+	/*else
+	{
+	printf("commit success\n");
+	char info[50];
+	sprintf(info, "commit success" );
+	LogMessage(info);
+	}*/
+	return ret;
+
+}
